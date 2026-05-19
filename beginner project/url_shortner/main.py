@@ -1,68 +1,92 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
-import random as rd
-import string 
+from fastapi import FastAPI, Depends, HTTPException
 from fastapi.responses import RedirectResponse
+from sqlalchemy.orm import Session
+from pydantic import BaseModel, HttpUrl
 
-
+from database import SessionLocal, engine, Base
+from models import URL
+from utils import generate_short_code
 
 app = FastAPI()
 
-class UrlRequest(BaseModel):
-    url : str
+# Create tables automatically
+Base.metadata.create_all(bind=engine)
 
 
-def url_generator():
-
-    characters = string.ascii_letters + string.digits
-    short_url = "".join(rd.choice(characters) for _ in range(6))
-    return short_url
-    
+# Request body model
+class URLRequest(BaseModel):
+    url: HttpUrl
 
 
-url_db = {}
+# Database session dependency
+def get_db():
 
-@app.post("/send_url")
-def url_shortener(req:UrlRequest):
-    short_url = url_generator()
-    url_db[short_url] = req.url
-    print(url_db)
+    db = SessionLocal()
+
+    try:
+        yield db
+
+    finally:
+        db.close()
+
+
+@app.get("/")
+def home():
+    return {
+        "message": "URL Shortener Running"
+    }
+
+
+@app.post("/shorten")
+def shorten_url(
+    req: URLRequest,
+    db: Session = Depends(get_db)
+):
+
+    # collision handling
+    while True:
+
+        short_code = generate_short_code()
+
+        existing_url = db.query(URL).filter(
+            URL.short_code == short_code
+        ).first()
+
+        if not existing_url:
+            break
+
+    # create ORM object
+    new_url = URL(
+        short_code=short_code,
+        original_url=str(req.url)
+    )
+
+    # save to DB
+    db.add(new_url)
+
+    db.commit()
 
     return {
-        "shortened Url":f"http:/127.0.0.1/{short_url}"
+        "short_url": f"http://127.0.0.1:8000/{short_code}"
     }
 
 
-@app.get("/{short_url}")
-def get_url(url:str):
-    full_url = url_db.get(url)
-    if full_url:
-        return RedirectResponse(full_url)
-    
-    return { 
-        "url":"url not found"
-    }
-    
+@app.get("/{short_code}")
+def redirect_url(
+    short_code: str,
+    db: Session = Depends(get_db)
+):
 
+    # find matching URL
+    url_entry = db.query(URL).filter(
+        URL.short_code == short_code
+    ).first()
 
+    if not url_entry:
 
+        raise HTTPException(
+            status_code=404,
+            detail="Short URL not found"
+        )
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-@app.get("/health")
-def health():
-    return {"this server is running on 8000"}
+    return RedirectResponse(url_entry.original_url)
