@@ -1,9 +1,11 @@
 from fastapi import APIRouter,Depends,HTTPException
-from schemas import UserRequest,UserLogin
+from schemas import UserRequest,UserResponse
 from sqlalchemy.orm import Session
 from database import get_db
 from models import User
-from auth import hash_password,verify_password
+from auth import hash_password,verify_password,create_access_token
+from auth import get_current_user,require_admin
+from fastapi.security import OAuth2PasswordRequestForm
 
 router = APIRouter()
 
@@ -36,28 +38,50 @@ def register(user:UserRequest,
 
 
 @router.post("/login")
-def login(user:UserLogin,db:Session = Depends(get_db)):
+def login(
+    form_data:OAuth2PasswordRequestForm = Depends(),
+    db:Session = Depends(get_db)):
     
-    user_exists = db.query(User).filter(User.email == user.email).first()
+    user_exists = db.query(User).filter(User.email == form_data.username).first()
 
     if not user_exists:
         raise HTTPException(
             status_code=404,
             detail="user doesn't exists")
     
-    if not verify_password(user.password,user_exists.password):
+    if not verify_password(form_data.password,
+                           user_exists.password):
         raise HTTPException(
             status_code=401,
             detail="wrong password or email"
         )
     
+    access_token = create_access_token(
+        data= {"sub":user_exists.email,
+               "role": user_exists.role}
+    )
+    
 
     return {
-        "message": "login successfull"
+        "access_token": access_token,
+        "token_type": "bearer"
     }
         
     
     
+@router.get("/me",response_model=UserResponse)
+def get_me(current:User = Depends(get_current_user)):
+    return current
+
+
+@router.get("/admin")
+def admin_route(current_user : User = Depends(require_admin)):
+
+
+    return { "message": f" welcome admin {current_user.username}"}
+
+    
+
 
         
     
